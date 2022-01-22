@@ -35,7 +35,7 @@
 
 ### 下载
 
-- 稳定版 [github: ![最新稳定版](README-zh.assets/jadx.svg)](https://github.com/skylot/jadx/releases/latest) 
+- 稳定版 [github: ![Latest release](https://img.shields.io/github/release/skylot/jadx.svg)](https://github.com/skylot/jadx/releases/latest)
 - 最新版 [测试版](https://nightly.link/skylot/jadx/workflows/build/master)
 
 下载完 `zip 文件`后，进入 `bin` 目录并运行:
@@ -185,6 +185,7 @@ options:
   --deobf-rewrite-cfg                 - 强制忽略和覆盖反混淆映射文件
   --deobf-use-sourcename              - 使用源文件名作为类名别名
   --deobf-parse-kotlin-metadata       - 将kotlin元数据解析为类和包名
+  --use-kotlin-methods-for-var-names  - 使用kotlin内在方法重命名变量，values:disable、apply、apply-and-hide、default: apply
   --rename-flags                      - 修复操作 (comma-separated list of):
                                          'case' - 修复区分大小写的问题(according to --fs-case-sensitive option),
                                          'valid' - 重命名Java标识符以使其有效,
