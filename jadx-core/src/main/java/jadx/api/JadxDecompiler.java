@@ -128,6 +128,7 @@ public final class JadxDecompiler implements Closeable {
 				loadedInputs.add(loadResult);
 			}
 		}
+		LOG.debug("Loaded using {} inputs plugin", loadedInputs.size());
 	}
 
 	private void reset() {
@@ -282,6 +283,9 @@ public final class JadxDecompiler implements Closeable {
 	}
 
 	private void appendResourcesSaveTasks(List<Runnable> tasks, File outDir) {
+		if (args.isSkipFilesSave()) {
+			return;
+		}
 		Set<String> inputFileNames = args.getInputFiles().stream().map(File::getAbsolutePath).collect(Collectors.toSet());
 		for (ResourceFile resourceFile : getResources()) {
 			if (resourceFile.getType() != ResourceType.ARSC
@@ -306,7 +310,13 @@ public final class JadxDecompiler implements Closeable {
 			}
 			processQueue.add(cls);
 		}
-		for (List<JavaClass> decompileBatch : decompileScheduler.buildBatches(processQueue)) {
+		List<List<JavaClass>> batches;
+		try {
+			batches = decompileScheduler.buildBatches(processQueue);
+		} catch (Exception e) {
+			throw new JadxRuntimeException("Decompilation batches build failed", e);
+		}
+		for (List<JavaClass> decompileBatch : batches) {
 			tasks.add(() -> {
 				for (JavaClass cls : decompileBatch) {
 					try {

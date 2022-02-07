@@ -386,10 +386,10 @@ public class Deobfuscator {
 		String alias = null;
 		String pkgName = null;
 		if (this.parseKotlinMetadata) {
-			ClassInfo kotlinCls = KotlinMetadataUtils.getClassName(cls);
+			ClsAliasPair kotlinCls = KotlinMetadataUtils.getClassAlias(cls);
 			if (kotlinCls != null) {
-				alias = prepareNameFull(kotlinCls.getShortName(), "C");
-				pkgName = kotlinCls.getPackage();
+				alias = kotlinCls.getName();
+				pkgName = kotlinCls.getPkg();
 			}
 		}
 		if (alias == null && this.useSourceNameAsAlias) {
@@ -581,6 +581,7 @@ public class Deobfuscator {
 		if (!pkg.hasAlias()) {
 			String pkgName = pkg.getName();
 			if ((args.isDeobfuscationOn() && shouldRename(pkgName))
+					&& (pkg.getParentPackage() != rootPackage || !TldHelper.contains(pkgName)) // check if first level is a valid tld
 					|| (args.isRenameValid() && !NameMapper.isValidIdentifier(pkgName))
 					|| (args.isRenamePrintable() && !NameMapper.isAllCharsPrintable(pkgName))) {
 				String pkgAlias = String.format("p%03d%s", pkgIndex++, prepareNamePart(pkg.getName()));
@@ -599,20 +600,6 @@ public class Deobfuscator {
 			return 'x' + Integer.toHexString(name.hashCode());
 		}
 		return NameMapper.removeInvalidCharsMiddle(name);
-	}
-
-	private String prepareNameFull(String name, String prefix) {
-		if (name.length() > maxLength) {
-			return makeHashName(name, prefix);
-		}
-		String result = NameMapper.removeInvalidChars(name, prefix);
-		if (result.isEmpty()) {
-			return makeHashName(name, prefix);
-		}
-		if (NameMapper.isReserved(result)) {
-			return prefix + result;
-		}
-		return result;
 	}
 
 	private static String makeHashName(String name, String invalidPrefix) {
