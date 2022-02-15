@@ -1,11 +1,18 @@
 package jadx.core.dex.visitors;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import org.jetbrains.annotations.Nullable;
 
 import jadx.core.dex.attributes.AFlag;
-import jadx.core.dex.attributes.nodes.AnonymousClassBaseAttr;
+import jadx.core.dex.attributes.AType;
+import jadx.core.dex.attributes.nodes.AnonymousClassAttr;
 import jadx.core.dex.info.AccessInfo;
 import jadx.core.dex.instructions.args.ArgType;
 import jadx.core.dex.nodes.ClassNode;
@@ -25,20 +32,32 @@ import jadx.core.utils.exceptions.JadxException;
 )
 public class ProcessAnonymous extends AbstractVisitor {
 
-	private boolean inlineAnonymous;
+	private boolean inlineAnonymousClasses;
 
 	@Override
 	public void init(RootNode root) {
-		inlineAnonymous = root.getArgs().isInlineAnonymousClasses();
+		inlineAnonymousClasses = root.getArgs().isInlineAnonymousClasses();
+		if (!inlineAnonymousClasses) {
+			return;
+		}
+		for (ClassNode cls : root.getClasses()) {
+			markAnonymousClass(cls);
+		}
+		mergeAnonymousDeps(root);
 	}
 
 	@Override
 	public boolean visit(ClassNode cls) throws JadxException {
-		if (!inlineAnonymous) {
-			return false;
+		if (inlineAnonymousClasses && cls.contains(AFlag.CLASS_UNLOADED)) {
+			// enter only on class reload
+			visitClassAndInners(cls);
 		}
+		return false;
+	}
+
+	private void visitClassAndInners(ClassNode cls) {
 		markAnonymousClass(cls);
-		return true;
+		cls.getInnerClasses().forEach(this::visitClassAndInners);
 	}
 
 	private static void markAnonymousClass(ClassNode cls) {
@@ -53,24 +72,112 @@ public class ProcessAnonymous extends AbstractVisitor {
 		if (baseType == null) {
 			return;
 		}
-
-		cls.add(AFlag.ANONYMOUS_CLASS);
-		cls.addAttr(new AnonymousClassBaseAttr(baseType));
+		ClassNode outerCls = anonymousConstructor.getUseIn().get(0).getParentClass();
+		cls.addAttr(new AnonymousClassAttr(outerCls, baseType));
 		cls.add(AFlag.DONT_GENERATE);
-
 		anonymousConstructor.add(AFlag.ANONYMOUS_CONSTRUCTOR);
+
 		// force anonymous class to be processed before outer class,
 		// actual usage of outer class will be removed at anonymous class process,
 		// see ModVisitor.processAnonymousConstructor method
-		ClassNode outerCls = anonymousConstructor.getUseIn().get(0).getParentClass();
 		ClassNode topOuterCls = outerCls.getTopParentClass();
-		ListUtils.safeRemove(cls.getDependencies(), topOuterCls);
+		cls.removeDependency(topOuterCls);
 		ListUtils.safeRemove(outerCls.getUseIn(), cls);
 
 		// move dependency to codegen stage
 		if (cls.isTopClass()) {
-			topOuterCls.setDependencies(ListUtils.safeRemoveAndTrim(topOuterCls.getDependencies(), cls));
-			topOuterCls.setCodegenDeps(ListUtils.safeAdd(topOuterCls.getCodegenDeps(), cls));
+			topOuterCls.removeDependency(cls);
+			topOuterCls.addCodegenDep(cls);
+		}
+	}
+
+	private static void undoAnonymousMark(ClassNode cls) {
+		AnonymousClassAttr attr = cls.get(AType.ANONYMOUS_CLASS);
+		ClassNode outerCls = attr.getOuterCls();
+		cls.setDependencies(ListUtils.safeAdd(cls.getDependencies(), outerCls.getTopParentClass()));
+		outerCls.setUseIn(ListUtils.safeAdd(outerCls.getUseIn(), cls));
+
+		cls.remove(AType.ANONYMOUS_CLASS);
+		cls.remove(AFlag.DONT_GENERATE);
+		for (MethodNode mth : cls.getMethods()) {
+			if (mth.isConstructor()) {
+				mth.remove(AFlag.ANONYMOUS_CONSTRUCTOR);
+			}
+		}
+		cls.addDebugComment("Anonymous mark cleared");
+	}
+
+	private void mergeAnonymousDeps(RootNode root) {
+		// Collect edges to build bidirectional tree:
+		// inline edge: anonymous -> outer (one-to-one)
+		// use edges: outer -> *anonymous (one-to-many)
+		Map<ClassNode, ClassNode> inlineMap = new HashMap<>();
+		Map<ClassNode, List<ClassNode>> useMap = new HashMap<>();
+		for (ClassNode anonymousCls : root.getClasses()) {
+			AnonymousClassAttr attr = anonymousCls.get(AType.ANONYMOUS_CLASS);
+			if (attr != null) {
+				ClassNode outerCls = attr.getOuterCls();
+				List<ClassNode> list = useMap.get(outerCls);
+				if (list == null || list.isEmpty()) {
+					list = new ArrayList<>(2);
+					useMap.put(outerCls, list);
+				}
+				list.add(anonymousCls);
+				useMap.putIfAbsent(anonymousCls, Collections.emptyList()); // put leaf explicitly
+				inlineMap.put(anonymousCls, outerCls);
+			}
+		}
+		if (inlineMap.isEmpty()) {
+			return;
+		}
+		// starting from leaf process deps in nodes up to root
+		Set<ClassNode> added = new HashSet<>();
+		useMap.forEach((key, list) -> {
+			if (list.isEmpty()) {
+				added.clear();
+				updateDeps(key, inlineMap, added);
+			}
+		});
+		for (ClassNode cls : root.getClasses()) {
+			List<ClassNode> deps = cls.getCodegenDeps();
+			if (deps.size() > 1) {
+				// distinct sorted dep, reusing collections to reduce memory allocations :)
+				added.clear();
+				added.addAll(deps);
+				deps.clear();
+				deps.addAll(added);
+				Collections.sort(deps);
+			}
+		}
+	}
+
+	private void updateDeps(ClassNode leafCls, Map<ClassNode, ClassNode> inlineMap, Set<ClassNode> added) {
+		ClassNode topNode;
+		ClassNode current = leafCls;
+		while (true) {
+			if (!added.add(current)) {
+				current.addWarnComment("Loop in anonymous inline: " + current + ", path: " + added);
+				added.forEach(ProcessAnonymous::undoAnonymousMark);
+				return;
+			}
+			ClassNode next = inlineMap.get(current);
+			if (next == null) {
+				topNode = current.getTopParentClass();
+				break;
+			}
+			current = next;
+		}
+		if (added.size() <= 2) {
+			// first level deps already processed
+			return;
+		}
+		List<ClassNode> deps = topNode.getCodegenDeps();
+		if (deps.isEmpty()) {
+			deps = new ArrayList<>(added.size());
+			topNode.setCodegenDeps(deps);
+		}
+		for (ClassNode add : added) {
+			deps.add(add.getTopParentClass());
 		}
 	}
 
