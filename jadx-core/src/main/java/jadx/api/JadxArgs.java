@@ -4,11 +4,14 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumSet;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.function.Predicate;
 
+import jadx.api.args.DeobfuscationMapFileMode;
 import jadx.api.data.ICodeData;
 import jadx.api.impl.AnnotatedCodeWriter;
 import jadx.api.impl.InMemoryCodeCache;
@@ -54,10 +57,11 @@ public class JadxArgs {
 	private Predicate<String> classFilter = null;
 
 	private boolean deobfuscationOn = false;
-	private boolean deobfuscationForceSave = false;
 	private boolean useSourceNameAsClassAlias = false;
 	private boolean parseKotlinMetadata = false;
 	private File deobfuscationMapFile = null;
+
+	private DeobfuscationMapFileMode deobfuscationMapFileMode = DeobfuscationMapFileMode.READ;
 
 	private int deobfuscationMinLength = 0;
 	private int deobfuscationMaxLength = Integer.MAX_VALUE;
@@ -97,6 +101,8 @@ public class JadxArgs {
 	 * Don't save files (can be using for performance testing)
 	 */
 	private boolean skipFilesSave = false;
+
+	private Map<String, String> pluginOptions = new HashMap<>();
 
 	public JadxArgs() {
 		// use default options
@@ -264,12 +270,24 @@ public class JadxArgs {
 		this.deobfuscationOn = deobfuscationOn;
 	}
 
+	@Deprecated
 	public boolean isDeobfuscationForceSave() {
-		return deobfuscationForceSave;
+		return deobfuscationMapFileMode == DeobfuscationMapFileMode.OVERWRITE;
 	}
 
+	@Deprecated
 	public void setDeobfuscationForceSave(boolean deobfuscationForceSave) {
-		this.deobfuscationForceSave = deobfuscationForceSave;
+		if (deobfuscationForceSave) {
+			this.deobfuscationMapFileMode = DeobfuscationMapFileMode.OVERWRITE;
+		}
+	}
+
+	public DeobfuscationMapFileMode getDeobfuscationMapFileMode() {
+		return deobfuscationMapFileMode;
+	}
+
+	public void setDeobfuscationMapFileMode(DeobfuscationMapFileMode deobfuscationMapFileMode) {
+		this.deobfuscationMapFileMode = deobfuscationMapFileMode;
 	}
 
 	public boolean isUseSourceNameAsClassAlias() {
@@ -460,6 +478,14 @@ public class JadxArgs {
 		this.skipFilesSave = skipFilesSave;
 	}
 
+	public Map<String, String> getPluginOptions() {
+		return pluginOptions;
+	}
+
+	public void setPluginOptions(Map<String, String> pluginOptions) {
+		this.pluginOptions = pluginOptions;
+	}
+
 	@Override
 	public String toString() {
 		return "JadxArgs{" + "inputFiles=" + inputFiles
@@ -476,7 +502,7 @@ public class JadxArgs {
 				+ ", skipSources=" + skipSources
 				+ ", deobfuscationOn=" + deobfuscationOn
 				+ ", deobfuscationMapFile=" + deobfuscationMapFile
-				+ ", deobfuscationForceSave=" + deobfuscationForceSave
+				+ ", deobfuscationMapFileMode=" + deobfuscationMapFileMode
 				+ ", useSourceNameAsClassAlias=" + useSourceNameAsClassAlias
 				+ ", parseKotlinMetadata=" + parseKotlinMetadata
 				+ ", useKotlinMethodsForVarNames=" + useKotlinMethodsForVarNames
@@ -493,6 +519,7 @@ public class JadxArgs {
 				+ ", codeCache=" + codeCache
 				+ ", codeWriter=" + codeWriterProvider.apply(this).getClass().getSimpleName()
 				+ ", useDxInput=" + useDxInput
+				+ ", pluginOptions=" + pluginOptions
 				+ '}';
 	}
 }

@@ -12,7 +12,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -37,28 +36,19 @@ public class DeobfPresets {
 	private final Map<String, String> fldPresetMap = new HashMap<>();
 	private final Map<String, String> mthPresetMap = new HashMap<>();
 
-	@Nullable
 	public static DeobfPresets build(RootNode root) {
 		Path deobfMapPath = getPathDeobfMapPath(root);
-		if (deobfMapPath == null) {
-			return null;
-		}
 		LOG.debug("Deobfuscation map file set to: {}", deobfMapPath);
 		return new DeobfPresets(deobfMapPath);
 	}
 
-	@Nullable
 	private static Path getPathDeobfMapPath(RootNode root) {
 		JadxArgs jadxArgs = root.getArgs();
 		File deobfMapFile = jadxArgs.getDeobfuscationMapFile();
 		if (deobfMapFile != null) {
 			return deobfMapFile.toPath();
 		}
-		List<File> inputFiles = jadxArgs.getInputFiles();
-		if (inputFiles.isEmpty()) {
-			return null;
-		}
-		Path inputFilePath = inputFiles.get(0).toPath().toAbsolutePath();
+		Path inputFilePath = jadxArgs.getInputFiles().get(0).toPath().toAbsolutePath();
 		String baseName = FileUtils.getPathBaseName(inputFilePath);
 		return inputFilePath.getParent().resolve(baseName + ".jobf");
 	}
@@ -70,9 +60,9 @@ public class DeobfPresets {
 	/**
 	 * Loads deobfuscator presets
 	 */
-	public void load() {
+	public boolean load() {
 		if (!Files.exists(deobfMapFile)) {
-			return;
+			return false;
 		}
 		LOG.info("Loading obfuscation map from: {}", deobfMapFile.toAbsolutePath());
 		try {
@@ -106,8 +96,10 @@ public class DeobfPresets {
 						break;
 				}
 			}
+			return true;
 		} catch (Exception e) {
 			LOG.error("Failed to load deobfuscation map file '{}'", deobfMapFile.toAbsolutePath(), e);
+			return false;
 		}
 	}
 
@@ -142,9 +134,7 @@ public class DeobfPresets {
 		}
 		Files.write(deobfMapFile, list, MAP_FILE_CHARSET,
 				StandardOpenOption.WRITE, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
-		if (LOG.isDebugEnabled()) {
-			LOG.debug("Deobfuscation map file saved as: {}", deobfMapFile);
-		}
+		LOG.info("Deobfuscation map file saved as: {}", deobfMapFile);
 	}
 
 	public String getForCls(ClassInfo cls) {

@@ -2,12 +2,15 @@ package jadx.cli;
 
 import java.util.ArrayList;
 import java.util.EnumSet;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import com.beust.jcommander.DynamicParameter;
 import com.beust.jcommander.IStringConverter;
 import com.beust.jcommander.Parameter;
 
@@ -16,6 +19,7 @@ import jadx.api.JadxArgs;
 import jadx.api.JadxArgs.RenameEnum;
 import jadx.api.JadxArgs.UseKotlinMethodsForVarNames;
 import jadx.api.JadxDecompiler;
+import jadx.api.args.DeobfuscationMapFileMode;
 import jadx.core.utils.exceptions.JadxException;
 import jadx.core.utils.files.FileUtils;
 
@@ -39,8 +43,11 @@ public class JadxCLIArgs {
 	@Parameter(names = { "-s", "--no-src" }, description = "do not decompile source code")
 	protected boolean skipSources = false;
 
-	@Parameter(names = { "--single-class" }, description = "decompile a single class")
+	@Parameter(names = { "--single-class" }, description = "decompile a single class, full name, raw or alias")
 	protected String singleClass = null;
+
+	@Parameter(names = { "--single-class-output" }, description = "file or dir for write if decompile a single class")
+	protected String singleClassOutput = null;
 
 	@Parameter(names = { "--output-format" }, description = "can be 'java' or 'json'")
 	protected String outputFormat = "java";
@@ -93,7 +100,18 @@ public class JadxCLIArgs {
 	)
 	protected String deobfuscationMapFile;
 
-	@Parameter(names = { "--deobf-rewrite-cfg" }, description = "force to ignore and overwrite deobfuscation map file")
+	@Parameter(
+			names = { "--deobf-cfg-file-mode" },
+			description = "set mode for handle deobfuscation map file:"
+					+ "\n 'read' - read if found, don't save (default)"
+					+ "\n 'read-or-save' - read if found, save otherwise (don't overwrite)"
+					+ "\n 'overwrite' - don't read, always save"
+					+ "\n 'ignore' - don't read and don't save",
+			converter = DeobfuscationMapFileModeConverter.class
+	)
+	protected DeobfuscationMapFileMode deobfuscationMapFileMode = DeobfuscationMapFileMode.READ;
+
+	@Parameter(names = { "--deobf-rewrite-cfg" }, description = "set '--deobf-cfg-file-mode' to 'overwrite' (deprecated)")
 	protected boolean deobfuscationForceSave = false;
 
 	@Parameter(names = { "--deobf-use-sourcename" }, description = "use source file name as class name alias")
@@ -162,6 +180,9 @@ public class JadxCLIArgs {
 	@Parameter(names = { "-h", "--help" }, description = "print this help", help = true)
 	protected boolean printHelp = false;
 
+	@DynamicParameter(names = "-P", description = "Plugin options", hidden = true)
+	protected Map<String, String> pluginOptions = new HashMap<>();
+
 	public boolean processArgs(String[] args) {
 		JCommanderWrapper<JadxCLIArgs> jcw = new JCommanderWrapper<>(this);
 		return jcw.parse(args) && process(jcw);
@@ -197,7 +218,6 @@ public class JadxCLIArgs {
 			if (threadsCount <= 0) {
 				throw new JadxException("Threads count must be positive, got: " + threadsCount);
 			}
-			LogHelper.setLogLevelFromArgs(this);
 		} catch (JadxException e) {
 			System.err.println("ERROR: " + e.getMessage());
 			jcw.printUsage();
@@ -215,9 +235,6 @@ public class JadxCLIArgs {
 		args.setOutputFormat(JadxArgs.OutputFormatEnum.valueOf(outputFormat.toUpperCase()));
 		args.setThreadsCount(threadsCount);
 		args.setSkipSources(skipSources);
-		if (singleClass != null) {
-			args.setClassFilter(className -> singleClass.equals(className));
-		}
 		args.setSkipResources(skipResources);
 		args.setFallbackMode(fallbackMode);
 		args.setShowInconsistentCode(showInconsistentCode);
@@ -226,7 +243,11 @@ public class JadxCLIArgs {
 		args.setReplaceConsts(replaceConsts);
 		args.setDeobfuscationOn(deobfuscationOn);
 		args.setDeobfuscationMapFile(FileUtils.toFile(deobfuscationMapFile));
-		args.setDeobfuscationForceSave(deobfuscationForceSave);
+		if (deobfuscationForceSave) {
+			args.setDeobfuscationMapFileMode(DeobfuscationMapFileMode.OVERWRITE);
+		} else {
+			args.setDeobfuscationMapFileMode(deobfuscationMapFileMode);
+		}
 		args.setDeobfuscationMinLength(deobfuscationMinLength);
 		args.setDeobfuscationMaxLength(deobfuscationMaxLength);
 		args.setUseSourceNameAsClassAlias(deobfuscationUseSourceNameAsAlias);
@@ -244,6 +265,7 @@ public class JadxCLIArgs {
 		args.setFsCaseSensitive(fsCaseSensitive);
 		args.setCommentsLevel(commentsLevel);
 		args.setUseDxInput(useDx);
+		args.setPluginOptions(pluginOptions);
 		return args;
 	}
 
@@ -261,6 +283,14 @@ public class JadxCLIArgs {
 
 	public String getOutDirRes() {
 		return outDirRes;
+	}
+
+	public String getSingleClass() {
+		return singleClass;
+	}
+
+	public String getSingleClassOutput() {
+		return singleClassOutput;
 	}
 
 	public boolean isSkipResources() {
@@ -323,6 +353,10 @@ public class JadxCLIArgs {
 		return deobfuscationMapFile;
 	}
 
+	public DeobfuscationMapFileMode getDeobfuscationMapFileMode() {
+		return deobfuscationMapFileMode;
+	}
+
 	public boolean isDeobfuscationForceSave() {
 		return deobfuscationForceSave;
 	}
@@ -383,6 +417,14 @@ public class JadxCLIArgs {
 		return commentsLevel;
 	}
 
+	public LogHelper.LogLevelEnum getLogLevel() {
+		return logLevel;
+	}
+
+	public Map<String, String> getPluginOptions() {
+		return pluginOptions;
+	}
+
 	static class RenameConverter implements IStringConverter<Set<RenameEnum>> {
 		private final String paramName;
 
@@ -434,6 +476,19 @@ public class JadxCLIArgs {
 				throw new IllegalArgumentException(
 						'\'' + value + "' is unknown, possible values are: "
 								+ JadxCLIArgs.enumValuesString(CommentsLevel.values()));
+			}
+		}
+	}
+
+	public static class DeobfuscationMapFileModeConverter implements IStringConverter<DeobfuscationMapFileMode> {
+		@Override
+		public DeobfuscationMapFileMode convert(String value) {
+			try {
+				return DeobfuscationMapFileMode.valueOf(value.toUpperCase());
+			} catch (Exception e) {
+				throw new IllegalArgumentException(
+						'\'' + value + "' is unknown, possible values are: "
+								+ JadxCLIArgs.enumValuesString(DeobfuscationMapFileMode.values()));
 			}
 		}
 	}
