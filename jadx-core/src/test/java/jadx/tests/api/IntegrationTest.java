@@ -1,5 +1,6 @@
 package jadx.tests.api;
 
+import java.io.Closeable;
 import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
@@ -34,6 +35,7 @@ import jadx.api.ICodeWriter;
 import jadx.api.JadxArgs;
 import jadx.api.JadxDecompiler;
 import jadx.api.JadxInternalAccess;
+import jadx.api.args.DeobfuscationMapFileMode;
 import jadx.api.data.annotations.InsnCodeOffset;
 import jadx.core.dex.attributes.AFlag;
 import jadx.core.dex.attributes.AType;
@@ -48,9 +50,9 @@ import jadx.core.utils.exceptions.JadxRuntimeException;
 import jadx.core.utils.files.FileUtils;
 import jadx.core.xmlgen.ResourceStorage;
 import jadx.core.xmlgen.entry.ResourceEntry;
-import jadx.tests.api.compiler.DynamicCompiler;
+import jadx.tests.api.compiler.CompilerOptions;
 import jadx.tests.api.compiler.JavaUtils;
-import jadx.tests.api.compiler.StaticCompiler;
+import jadx.tests.api.compiler.TestCompiler;
 import jadx.tests.api.utils.TestUtils;
 
 import static org.apache.commons.lang3.StringUtils.leftPad;
@@ -63,7 +65,6 @@ import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 public abstract class IntegrationTest extends TestUtils {
@@ -93,9 +94,7 @@ public abstract class IntegrationTest extends TestUtils {
 	protected JadxArgs args;
 
 	protected boolean compile;
-	protected boolean withDebugInfo;
-	protected boolean useEclipseCompiler;
-	private int targetJavaVersion = 8;
+	private CompilerOptions compilerOptions;
 
 	private boolean saveTestJar = false;
 
@@ -107,7 +106,8 @@ public abstract class IntegrationTest extends TestUtils {
 	private boolean printDisassemble;
 	private Boolean useJavaInput = null;
 
-	private DynamicCompiler dynamicCompiler;
+	private @Nullable TestCompiler sourceCompiler;
+	private @Nullable TestCompiler decompiledCompiler;
 
 	static {
 		// enable debug checks
@@ -118,9 +118,8 @@ public abstract class IntegrationTest extends TestUtils {
 
 	@BeforeEach
 	public void init() {
-		this.withDebugInfo = true;
 		this.compile = true;
-		this.useEclipseCompiler = false;
+		this.compilerOptions = new CompilerOptions();
 		this.resMap = Collections.emptyMap();
 
 		args = new JadxArgs();
@@ -130,13 +129,21 @@ public abstract class IntegrationTest extends TestUtils {
 		args.setSkipResources(true);
 		args.setFsCaseSensitive(false); // use same value on all systems
 		args.setCommentsLevel(CommentsLevel.DEBUG);
+		args.setDeobfuscationOn(false);
+		args.setDeobfuscationMapFileMode(DeobfuscationMapFileMode.IGNORE);
 	}
 
 	@AfterEach
-	public void after() {
+	public void after() throws IOException {
 		FileUtils.clearTempRootDir();
-		if (jadxDecompiler != null) {
-			jadxDecompiler.close();
+		close(jadxDecompiler);
+		close(sourceCompiler);
+		close(decompiledCompiler);
+	}
+
+	private void close(Closeable cloaseble) throws IOException {
+		if (cloaseble != null) {
+			cloaseble.close();
 		}
 	}
 
@@ -342,16 +349,20 @@ public abstract class IntegrationTest extends TestUtils {
 	}
 
 	private boolean runSourceAutoCheck(String clsName) {
+		if (sourceCompiler == null) {
+			// no source code (smali case)
+			return true;
+		}
 		Class<?> origCls;
 		try {
-			origCls = Class.forName(clsName);
+			origCls = sourceCompiler.getClass(clsName);
 		} catch (ClassNotFoundException e) {
-			// ignore
+			rethrow("Missing class: " + clsName, e);
 			return true;
 		}
 		Method checkMth;
 		try {
-			checkMth = origCls.getMethod(CHECK_METHOD_NAME);
+			checkMth = sourceCompiler.getMethod(origCls, CHECK_METHOD_NAME, new Class[] {});
 		} catch (NoSuchMethodException e) {
 			// ignore
 			return true;
@@ -373,10 +384,10 @@ public abstract class IntegrationTest extends TestUtils {
 
 	public void runDecompiledAutoCheck(ClassNode cls) {
 		try {
-			limitExecTime(() -> invoke(cls, "check"));
+			limitExecTime(() -> invoke(decompiledCompiler, cls.getFullName(), CHECK_METHOD_NAME));
 			System.out.println("Decompiled check: PASSED");
 		} catch (Throwable e) {
-			throw new JadxRuntimeException("Decompiled check failed", e);
+			rethrow("Decompiled check failed", e);
 		}
 	}
 
@@ -400,8 +411,9 @@ public abstract class IntegrationTest extends TestUtils {
 		if (e instanceof InvocationTargetException) {
 			rethrow(msg, e.getCause());
 		} else if (e instanceof ExecutionException) {
-			rethrow(e.getMessage(), e.getCause());
+			rethrow(msg, e.getCause());
 		} else if (e instanceof AssertionError) {
+			System.err.println(msg);
 			throw (AssertionError) e;
 		} else {
 			throw new RuntimeException(msg, e);
@@ -423,22 +435,19 @@ public abstract class IntegrationTest extends TestUtils {
 			return;
 		}
 		try {
-			dynamicCompiler = new DynamicCompiler(clsList);
-			boolean result = dynamicCompiler.compile();
-			assertTrue(result, "Compilation failed");
+			// TODO: eclipse uses files or compilation units providers added in Java 9
+			compilerOptions.setUseEclipseCompiler(false);
+			decompiledCompiler = new TestCompiler(compilerOptions);
+			decompiledCompiler.compileNodes(clsList);
 			System.out.println("Compilation: PASSED");
 		} catch (Exception e) {
 			fail(e);
 		}
 	}
 
-	public Object invoke(ClassNode cls, String method) throws Exception {
-		return invoke(cls, method, new Class<?>[0]);
-	}
-
-	public Object invoke(ClassNode cls, String methodName, Class<?>[] types, Object... args) throws Exception {
-		assertNotNull(dynamicCompiler, "dynamicCompiler not ready");
-		return dynamicCompiler.invoke(cls, methodName, types, args);
+	public Object invoke(TestCompiler compiler, String clsFullName, String method) throws Exception {
+		assertNotNull(compiler, "compiler not ready");
+		return compiler.invoke(clsFullName, method, new Class<?>[] {}, new Object[] {});
 	}
 
 	private List<File> compileClass(Class<?> cls) throws IOException {
@@ -459,8 +468,8 @@ public abstract class IntegrationTest extends TestUtils {
 		List<File> compileFileList = Collections.singletonList(file);
 
 		Path outTmp = FileUtils.createTempDir("jadx-tmp-classes");
-		List<File> files = StaticCompiler.compile(compileFileList, outTmp.toFile(), withDebugInfo, useEclipseCompiler, targetJavaVersion);
-		files.forEach(File::deleteOnExit);
+		sourceCompiler = new TestCompiler(compilerOptions);
+		List<File> files = sourceCompiler.compileFiles(compileFileList, outTmp);
 		if (saveTestJar) {
 			saveToJar(files, outTmp);
 		}
@@ -489,6 +498,10 @@ public abstract class IntegrationTest extends TestUtils {
 		return args;
 	}
 
+	public CompilerOptions getCompilerOptions() {
+		return compilerOptions;
+	}
+
 	public void setArgs(JadxArgs args) {
 		this.args = args;
 	}
@@ -498,16 +511,17 @@ public abstract class IntegrationTest extends TestUtils {
 	}
 
 	protected void noDebugInfo() {
-		this.withDebugInfo = false;
+		this.compilerOptions.setIncludeDebugInfo(false);
 	}
 
-	protected void useEclipseCompiler() {
-		this.useEclipseCompiler = true;
+	public void useEclipseCompiler() {
+		Assumptions.assumeTrue(JavaUtils.checkJavaVersion(11), "eclipse compiler library using Java 11");
+		this.compilerOptions.setUseEclipseCompiler(true);
 	}
 
 	public void useTargetJavaVersion(int version) {
 		Assumptions.assumeTrue(JavaUtils.checkJavaVersion(version), "skip test for higher java version");
-		this.targetJavaVersion = version;
+		this.compilerOptions.setJavaVersion(version);
 	}
 
 	protected void setFallback() {
@@ -521,7 +535,7 @@ public abstract class IntegrationTest extends TestUtils {
 
 	protected void enableDeobfuscation() {
 		args.setDeobfuscationOn(true);
-		args.setDeobfuscationForceSave(true);
+		args.setDeobfuscationMapFileMode(DeobfuscationMapFileMode.OVERWRITE);
 		args.setDeobfuscationMinLength(2);
 		args.setDeobfuscationMaxLength(64);
 	}
