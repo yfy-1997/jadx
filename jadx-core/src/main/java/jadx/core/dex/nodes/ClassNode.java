@@ -16,9 +16,11 @@ import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import jadx.api.DecompilationMode;
 import jadx.api.ICodeCache;
 import jadx.api.ICodeInfo;
 import jadx.api.ICodeWriter;
+import jadx.api.JadxArgs;
 import jadx.api.plugins.input.data.IClassData;
 import jadx.api.plugins.input.data.IFieldData;
 import jadx.api.plugins.input.data.IMethodData;
@@ -34,6 +36,7 @@ import jadx.core.Consts;
 import jadx.core.ProcessClass;
 import jadx.core.dex.attributes.AFlag;
 import jadx.core.dex.attributes.AType;
+import jadx.core.dex.attributes.nodes.InlinedAttr;
 import jadx.core.dex.attributes.nodes.NotificationAttrNode;
 import jadx.core.dex.info.AccessInfo;
 import jadx.core.dex.info.AccessInfo.AFType;
@@ -304,6 +307,26 @@ public class ClassNode extends NotificationAttrNode implements ILoadable, ICodeN
 		return decompile(true);
 	}
 
+	/**
+	 * WARNING: Slow operation! Use with caution!
+	 */
+	public ICodeInfo decompileWithMode(DecompilationMode mode) {
+		DecompilationMode baseMode = root.getArgs().getDecompilationMode();
+		if (mode == baseMode) {
+			return decompile(true);
+		}
+		JadxArgs args = root.getArgs();
+		try {
+			unload();
+			args.setDecompilationMode(mode);
+			ProcessClass process = new ProcessClass(args);
+			process.initPasses(root);
+			return process.generateCode(this);
+		} finally {
+			args.setDecompilationMode(baseMode);
+		}
+	}
+
 	public ICodeInfo getCode() {
 		return decompile(true);
 	}
@@ -355,7 +378,7 @@ public class ClassNode extends NotificationAttrNode implements ILoadable, ICodeN
 				return code;
 			}
 		}
-		ICodeInfo codeInfo = ProcessClass.generateCode(this);
+		ICodeInfo codeInfo = root.getProcessClasses().generateCode(this);
 		codeCache.add(clsRawName, codeInfo);
 		return codeInfo;
 	}
@@ -611,6 +634,7 @@ public class ClassNode extends NotificationAttrNode implements ILoadable, ICodeN
 		if (inlinedClasses.isEmpty()) {
 			inlinedClasses = new ArrayList<>(5);
 		}
+		cls.addAttr(new InlinedAttr(this));
 		inlinedClasses.add(cls);
 	}
 

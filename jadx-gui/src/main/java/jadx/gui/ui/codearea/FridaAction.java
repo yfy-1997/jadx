@@ -1,13 +1,14 @@
 package jadx.gui.ui.codearea;
 
-import java.awt.event.ActionEvent;
 import java.awt.event.KeyEvent;
-import java.util.*;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
-import javax.swing.*;
+import javax.swing.JOptionPane;
 
-import org.jetbrains.annotations.Nullable;
+import org.apache.commons.text.StringEscapeUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -30,50 +31,41 @@ import jadx.gui.utils.UiUtils;
 
 import static javax.swing.KeyStroke.getKeyStroke;
 
-public final class FridaAction extends JNodeMenuAction<JNode> {
+public final class FridaAction extends JNodeAction {
 	private static final Logger LOG = LoggerFactory.getLogger(FridaAction.class);
 	private static final long serialVersionUID = -3084073927621269039L;
-	private final Map<String, Boolean> isInitial = new HashMap<>();
 
 	public FridaAction(CodeArea codeArea) {
-
 		super(NLS.str("popup.frida") + " (f)", codeArea);
-		KeyStroke key = getKeyStroke(KeyEvent.VK_F, 0);
-		codeArea.getInputMap().put(key, "trigger frida");
-		codeArea.getActionMap().put("trigger frida", new AbstractAction() {
-			@Override
-
-			public void actionPerformed(ActionEvent e) {
-				node = getNodeByOffset(codeArea.getWordStart(codeArea.getCaretPosition()));
-				copyFridaSnippet();
-			}
-		});
+		addKeyBinding(getKeyStroke(KeyEvent.VK_F, 0), "trigger frida");
 	}
 
 	@Override
-	public void actionPerformed(ActionEvent e) {
-		node = codeArea.getNodeUnderCaret();
-		copyFridaSnippet();
-	}
-
-	private void copyFridaSnippet() {
+	public void runAction(JNode node) {
 		try {
-			String fridaSnippet = generateFridaSnippet();
+			String fridaSnippet = generateFridaSnippet(node);
 			LOG.info("Frida snippet:\n{}", fridaSnippet);
 			UiUtils.copyToClipboard(fridaSnippet);
 		} catch (Exception e) {
 			LOG.error("Failed to generate Frida code snippet", e);
-			JOptionPane.showMessageDialog(codeArea.getMainWindow(), e.getLocalizedMessage(), NLS.str("error_dialog.title"),
+			JOptionPane.showMessageDialog(getCodeArea().getMainWindow(), e.getLocalizedMessage(), NLS.str("error_dialog.title"),
 					JOptionPane.ERROR_MESSAGE);
 		}
 	}
 
-	private String generateFridaSnippet() {
+	@Override
+	public boolean isActionEnabled(JNode node) {
+		return node instanceof JMethod || node instanceof JClass || node instanceof JField;
+	}
+
+	private String generateFridaSnippet(JNode node) {
 		if (node instanceof JMethod) {
 			return generateMethodSnippet((JMethod) node);
-		} else if (node instanceof JClass) {
+		}
+		if (node instanceof JClass) {
 			return generateClassSnippet((JClass) node);
-		} else if (node instanceof JField) {
+		}
+		if (node instanceof JField) {
 			return generateFieldSnippet((JField) node);
 		}
 		throw new JadxRuntimeException("Unsupported node type: " + (node != null ? node.getClass() : "null"));
@@ -82,20 +74,19 @@ public final class FridaAction extends JNodeMenuAction<JNode> {
 	private String generateMethodSnippet(JMethod jMth) {
 		JavaMethod javaMethod = jMth.getJavaMethod();
 		MethodInfo methodInfo = javaMethod.getMethodNode().getMethodInfo();
-		String methodName = methodInfo.getName();
+		String methodName = StringEscapeUtils.escapeEcmaScript(methodInfo.getName());
 		if (methodInfo.isConstructor()) {
 			methodName = "$init";
 		}
-		String rawClassName = javaMethod.getDeclaringClass().getRawName();
 		String shortClassName = javaMethod.getDeclaringClass().getName();
 
 		String functionUntilImplementation;
 		if (isOverloaded(javaMethod.getMethodNode())) {
 			List<ArgType> methodArgs = methodInfo.getArgumentsTypes();
 			String overloadStr = methodArgs.stream().map(this::parseArgType).collect(Collectors.joining(", "));
-			functionUntilImplementation = String.format("%s.%s.overload(%s).implementation", shortClassName, methodName, overloadStr);
+			functionUntilImplementation = String.format("%s[\"%s\"].overload(%s).implementation", shortClassName, methodName, overloadStr);
 		} else {
-			functionUntilImplementation = String.format("%s.%s.implementation", shortClassName, methodName);
+			functionUntilImplementation = String.format("%s[\"%s\"].implementation", shortClassName, methodName);
 		}
 
 		String functionParametersString =
@@ -114,28 +105,19 @@ public final class FridaAction extends JNodeMenuAction<JNode> {
 						+ "};",
 				functionUntilImplementation, functionParametersString, methodName, methodName, functionParametersString, methodName);
 
-		String finalFridaCode;
-		if (isInitial.getOrDefault(rawClassName, true)) {
-			String classSnippet = generateClassSnippet(jMth.getJParent());
-			finalFridaCode = classSnippet + "\n" + functionParameterAndBody;
-		} else {
-			finalFridaCode = functionParameterAndBody;
-		}
-		return finalFridaCode;
+		return generateClassSnippet(jMth.getJParent()) + "\n" + functionParameterAndBody;
 	}
 
 	private String generateClassSnippet(JClass jc) {
 		JavaClass javaClass = jc.getCls();
-		String rawClassName = javaClass.getRawName();
+		String rawClassName = StringEscapeUtils.escapeEcmaScript(javaClass.getRawName());
 		String shortClassName = javaClass.getName();
-		String finalFridaCode = String.format("let %s = Java.use(\"%s\");", shortClassName, rawClassName);
-		isInitial.put(rawClassName, false);
-		return finalFridaCode;
+		return String.format("let %s = Java.use(\"%s\");", shortClassName, rawClassName);
 	}
 
 	private String generateFieldSnippet(JField jf) {
 		JavaField javaField = jf.getJavaField();
-		String rawFieldName = javaField.getRawName();
+		String rawFieldName = StringEscapeUtils.escapeEcmaScript(javaField.getRawName());
 		String fieldName = javaField.getName();
 
 		List<MethodNode> methodNodes = javaField.getFieldNode().getParentClass().getMethods();
@@ -167,11 +149,5 @@ public final class FridaAction extends JNodeMenuAction<JNode> {
 			parsedArgType.append(x);
 		}
 		return parsedArgType.append("'").toString();
-	}
-
-	@Nullable
-	@Override
-	public JNode getNodeByOffset(int offset) {
-		return codeArea.getJNodeAtOffset(offset);
 	}
 }

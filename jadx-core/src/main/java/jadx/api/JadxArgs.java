@@ -38,7 +38,6 @@ public class JadxArgs {
 	private boolean cfgOutput = false;
 	private boolean rawCFGOutput = false;
 
-	private boolean fallbackMode = false;
 	private boolean showInconsistentCode = false;
 
 	private boolean useImports = true;
@@ -55,6 +54,11 @@ public class JadxArgs {
 	 * Predicate that allows to filter the classes to be process based on their full name
 	 */
 	private Predicate<String> classFilter = null;
+
+	/**
+	 * Save dependencies for classes accepted by {@code classFilter}
+	 */
+	private boolean includeDependencies = false;
 
 	private boolean deobfuscationOn = false;
 	private boolean useSourceNameAsClassAlias = false;
@@ -84,6 +88,8 @@ public class JadxArgs {
 	}
 
 	private OutputFormatEnum outputFormat = OutputFormatEnum.JAVA;
+
+	private DecompilationMode decompilationMode = DecompilationMode.AUTO;
 
 	private ICodeData codeData;
 
@@ -175,11 +181,17 @@ public class JadxArgs {
 	}
 
 	public boolean isFallbackMode() {
-		return fallbackMode;
+		return decompilationMode == DecompilationMode.FALLBACK;
 	}
 
+	/**
+	 * Deprecated: use 'decompilation mode' property
+	 */
+	@Deprecated
 	public void setFallbackMode(boolean fallbackMode) {
-		this.fallbackMode = fallbackMode;
+		if (fallbackMode) {
+			this.decompilationMode = DecompilationMode.FALLBACK;
+		}
 	}
 
 	public boolean isShowInconsistentCode() {
@@ -252,6 +264,14 @@ public class JadxArgs {
 
 	public void setSkipSources(boolean skipSources) {
 		this.skipSources = skipSources;
+	}
+
+	public void setIncludeDependencies(boolean includeDependencies) {
+		this.includeDependencies = includeDependencies;
+	}
+
+	public boolean isIncludeDependencies() {
+		return includeDependencies;
 	}
 
 	public Predicate<String> getClassFilter() {
@@ -422,6 +442,14 @@ public class JadxArgs {
 		this.outputFormat = outputFormat;
 	}
 
+	public DecompilationMode getDecompilationMode() {
+		return decompilationMode;
+	}
+
+	public void setDecompilationMode(DecompilationMode decompilationMode) {
+		this.decompilationMode = decompilationMode;
+	}
+
 	public ICodeCache getCodeCache() {
 		return codeCache;
 	}
@@ -493,13 +521,12 @@ public class JadxArgs {
 				+ ", outDirSrc=" + outDirSrc
 				+ ", outDirRes=" + outDirRes
 				+ ", threadsCount=" + threadsCount
-				+ ", cfgOutput=" + cfgOutput
-				+ ", rawCFGOutput=" + rawCFGOutput
-				+ ", fallbackMode=" + fallbackMode
+				+ ", decompilationMode=" + decompilationMode
 				+ ", showInconsistentCode=" + showInconsistentCode
 				+ ", useImports=" + useImports
 				+ ", skipResources=" + skipResources
 				+ ", skipSources=" + skipSources
+				+ ", includeDependencies=" + includeDependencies
 				+ ", deobfuscationOn=" + deobfuscationOn
 				+ ", deobfuscationMapFile=" + deobfuscationMapFile
 				+ ", deobfuscationMapFileMode=" + deobfuscationMapFileMode
@@ -520,6 +547,8 @@ public class JadxArgs {
 				+ ", codeWriter=" + codeWriterProvider.apply(this).getClass().getSimpleName()
 				+ ", useDxInput=" + useDxInput
 				+ ", pluginOptions=" + pluginOptions
+				+ ", cfgOutput=" + cfgOutput
+				+ ", rawCFGOutput=" + rawCFGOutput
 				+ '}';
 	}
 }

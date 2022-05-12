@@ -11,6 +11,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import javax.swing.JOptionPane;
 import javax.swing.tree.DefaultMutableTreeNode;
 
 import org.slf4j.Logger;
@@ -33,7 +34,6 @@ import jadx.gui.device.debugger.SmaliDebugger.RuntimeField;
 import jadx.gui.device.debugger.SmaliDebugger.RuntimeRegister;
 import jadx.gui.device.debugger.SmaliDebugger.RuntimeValue;
 import jadx.gui.device.debugger.SmaliDebugger.RuntimeVarInfo;
-import jadx.gui.device.debugger.SmaliDebugger.SmaliDebuggerException;
 import jadx.gui.device.debugger.smali.Smali;
 import jadx.gui.device.debugger.smali.SmaliRegister;
 import jadx.gui.treemodel.JClass;
@@ -41,8 +41,7 @@ import jadx.gui.ui.panel.IDebugController;
 import jadx.gui.ui.panel.JDebuggerPanel;
 import jadx.gui.ui.panel.JDebuggerPanel.IListElement;
 import jadx.gui.ui.panel.JDebuggerPanel.ValueTreeNode;
-
-import static jadx.gui.device.debugger.SmaliDebugger.RuntimeType;
+import jadx.gui.utils.NLS;
 
 public final class DebugController implements SmaliDebugger.SuspendListener, IDebugController {
 	private static final Logger LOG = LoggerFactory.getLogger(DebugController.class);
@@ -72,23 +71,22 @@ public final class DebugController implements SmaliDebugger.SuspendListener, IDe
 	private final ExecutorService updateQueue = Executors.newSingleThreadExecutor();
 	private final ExecutorService lazyQueue = Executors.newSingleThreadExecutor();
 
-	/**
-	 * @param args at least 3 elements, host, port and android release version respectively.
-	 */
 	@Override
-	public boolean startDebugger(JDebuggerPanel debuggerPanel, String[] args) {
+	public boolean startDebugger(JDebuggerPanel debuggerPanel, String adbHost, int adbPort, int androidVer) {
 		if (TYPE_MAP.isEmpty()) {
 			initTypeMap();
 		}
 		this.debuggerPanel = debuggerPanel;
 		debuggerPanel.resetUI();
 		try {
-			debugger = SmaliDebugger.attach(args[0], Integer.parseInt(args[1]), this);
+			debugger = SmaliDebugger.attach(adbHost, adbPort, this);
 		} catch (SmaliDebuggerException e) {
+			JOptionPane.showMessageDialog(debuggerPanel.getMainWindow(), e.getMessage(),
+					NLS.str("error_dialog.title"), JOptionPane.ERROR_MESSAGE);
 			logErr(e);
 			return false;
 		}
-		art = ArtAdapter.getAdapter(Integer.parseInt(args[2]));
+		art = ArtAdapter.getAdapter(androidVer);
 		resetAllInfo();
 		hasResumed = false;
 		run = debugger::resume;
@@ -359,7 +357,7 @@ public final class DebugController implements SmaliDebugger.SuspendListener, IDe
 	}
 
 	@Override
-	public void onSuspendEvent(SmaliDebugger.SuspendInfo info) {
+	public void onSuspendEvent(SuspendInfo info) {
 		if (!isDebugging()) {
 			return;
 		}

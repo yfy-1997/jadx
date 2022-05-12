@@ -182,6 +182,16 @@ public class BlockUtils {
 		return null;
 	}
 
+	public static int getFirstSourceLine(IBlock block) {
+		for (InsnNode insn : block.getInstructions()) {
+			int line = insn.getSourceLine();
+			if (line != 0) {
+				return line;
+			}
+		}
+		return 0;
+	}
+
 	@Nullable
 	public static InsnNode getFirstInsn(@Nullable IBlock block) {
 		if (block == null) {
@@ -207,11 +217,22 @@ public class BlockUtils {
 	}
 
 	public static boolean isExitBlock(MethodNode mth, BlockNode block) {
-		BlockNode exitBlock = mth.getExitBlock();
-		if (block == exitBlock) {
+		if (block == mth.getExitBlock()) {
 			return true;
 		}
-		return exitBlock.getPredecessors().contains(block);
+		return isExitBlock(block);
+	}
+
+	public static boolean isExitBlock(BlockNode block) {
+		List<BlockNode> successors = block.getSuccessors();
+		if (successors.isEmpty()) {
+			return true;
+		}
+		if (successors.size() == 1) {
+			BlockNode next = successors.get(0);
+			return next.getSuccessors().isEmpty();
+		}
+		return false;
 	}
 
 	public static boolean containsExitInsn(IBlock block) {
@@ -448,6 +469,31 @@ public class BlockUtils {
 				queue.pollLast();
 				if (queue.isEmpty()) {
 					return false;
+				}
+			}
+		}
+	}
+
+	public static void dfsVisit(MethodNode mth, Consumer<BlockNode> visitor) {
+		BitSet visited = newBlocksBitSet(mth);
+		Deque<BlockNode> queue = new ArrayDeque<>();
+		BlockNode enterBlock = mth.getEnterBlock();
+		queue.addLast(enterBlock);
+		visited.set(mth.getEnterBlock().getId());
+		while (true) {
+			BlockNode current = queue.pollLast();
+			if (current == null) {
+				return;
+			}
+			visitor.accept(current);
+			List<BlockNode> successors = current.getSuccessors();
+			int count = successors.size();
+			for (int i = count - 1; i >= 0; i--) { // to preserve order in queue
+				BlockNode next = successors.get(i);
+				int nextId = next.getId();
+				if (!visited.get(nextId)) {
+					queue.addLast(next);
+					visited.set(nextId);
 				}
 			}
 		}

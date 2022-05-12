@@ -33,6 +33,8 @@ import jadx.api.plugins.input.data.ILoadResult;
 import jadx.api.plugins.options.JadxPluginOptions;
 import jadx.core.Jadx;
 import jadx.core.dex.attributes.AFlag;
+import jadx.core.dex.attributes.AType;
+import jadx.core.dex.attributes.nodes.InlinedAttr;
 import jadx.core.dex.attributes.nodes.LineAttrNode;
 import jadx.core.dex.nodes.ClassNode;
 import jadx.core.dex.nodes.FieldNode;
@@ -96,6 +98,8 @@ public final class JadxDecompiler implements Closeable {
 
 	private final IDecompileScheduler decompileScheduler = new DecompilerScheduler(this);
 
+	private final List<ILoadResult> customLoads = new ArrayList<>();
+
 	public JadxDecompiler() {
 		this(new JadxArgs());
 	}
@@ -106,7 +110,7 @@ public final class JadxDecompiler implements Closeable {
 
 	public void load() {
 		reset();
-		JadxArgsValidator.validate(args);
+		JadxArgsValidator.validate(this);
 		LOG.info("loading ...");
 		loadPlugins(args);
 		loadInputFiles();
@@ -130,9 +134,18 @@ public final class JadxDecompiler implements Closeable {
 				loadedInputs.add(loadResult);
 			}
 		}
+		loadedInputs.addAll(customLoads);
 		if (LOG.isDebugEnabled()) {
 			LOG.debug("Loaded using {} inputs plugin in {} ms", loadedInputs.size(), System.currentTimeMillis() - start);
 		}
+	}
+
+	public void addCustomLoad(ILoadResult customLoad) {
+		customLoads.add(customLoad);
+	}
+
+	public List<ILoadResult> getCustomLoads() {
+		return customLoads;
 	}
 
 	private void reset() {
@@ -318,10 +331,14 @@ public final class JadxDecompiler implements Closeable {
 		List<JavaClass> classes = getClasses();
 		List<JavaClass> processQueue = new ArrayList<>(classes.size());
 		for (JavaClass cls : classes) {
-			if (cls.getClassNode().contains(AFlag.DONT_GENERATE)) {
+			ClassNode clsNode = cls.getClassNode();
+			if (clsNode.contains(AFlag.DONT_GENERATE)) {
 				continue;
 			}
-			if (classFilter != null && !classFilter.test(cls.getFullName())) {
+			if (classFilter != null && !classFilter.test(clsNode.getClassInfo().getFullName())) {
+				if (!args.isIncludeDependencies()) {
+					clsNode.add(AFlag.DONT_GENERATE);
+				}
 				continue;
 			}
 			processQueue.add(cls);
@@ -483,12 +500,12 @@ public final class JadxDecompiler implements Closeable {
 		if (parentClass.contains(AFlag.DONT_GENERATE)) {
 			return null;
 		}
-		if (parentClass != cls) {
-			JavaClass parentJavaClass = classesMap.get(parentClass);
-			if (parentJavaClass == null) {
-				getClasses();
-				parentJavaClass = classesMap.get(parentClass);
-			}
+		JavaClass parentJavaClass = classesMap.get(parentClass);
+		if (parentJavaClass == null) {
+			getClasses();
+			parentJavaClass = classesMap.get(parentClass);
+		}
+		if (parentJavaClass != null) {
 			loadJavaClass(parentJavaClass);
 			javaClass = classesMap.get(cls);
 			if (javaClass != null) {
@@ -512,7 +529,9 @@ public final class JadxDecompiler implements Closeable {
 			return null;
 		}
 		// parent class not loaded yet
-		JavaClass javaClass = getJavaClassByNode(mth.getParentClass().getTopParentClass());
+		ClassNode parentClass = mth.getParentClass();
+		ClassNode codeCls = getCodeParentClass(parentClass);
+		JavaClass javaClass = getJavaClassByNode(codeCls);
 		if (javaClass == null) {
 			return null;
 		}
@@ -521,10 +540,24 @@ public final class JadxDecompiler implements Closeable {
 		if (javaMethod != null) {
 			return javaMethod;
 		}
-		if (mth.getParentClass().hasNotGeneratedParent()) {
+		if (parentClass.hasNotGeneratedParent()) {
 			return null;
 		}
 		throw new JadxRuntimeException("JavaMethod not found by MethodNode: " + mth);
+	}
+
+	private ClassNode getCodeParentClass(ClassNode cls) {
+		ClassNode codeCls;
+		InlinedAttr inlinedAttr = cls.get(AType.INLINED);
+		if (inlinedAttr != null) {
+			codeCls = inlinedAttr.getInlineCls().getTopParentClass();
+		} else {
+			codeCls = cls.getTopParentClass();
+		}
+		if (codeCls == cls) {
+			return codeCls;
+		}
+		return getCodeParentClass(codeCls);
 	}
 
 	@Nullable

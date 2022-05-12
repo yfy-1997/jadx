@@ -76,8 +76,8 @@ public class BackgroundExecutor {
 		execute(new SimpleTask(title, Collections.singletonList(backgroundRunnable), onFinishUiRunnable));
 	}
 
-	public void execute(String title, Runnable backgroundRunnable) {
-		execute(new SimpleTask(title, Collections.singletonList(backgroundRunnable), null));
+	public Future<TaskStatus> execute(String title, Runnable backgroundRunnable) {
+		return execute(new SimpleTask(title, Collections.singletonList(backgroundRunnable), null));
 	}
 
 	private ThreadPoolExecutor makeTaskQueueExecutor() {
@@ -86,6 +86,7 @@ public class BackgroundExecutor {
 
 	private final class TaskWorker extends SwingWorker<TaskStatus, Void> implements ITaskInfo {
 		private final IBackgroundTask task;
+		private ThreadPoolExecutor executor;
 		private TaskStatus status = TaskStatus.WAIT;
 		private long jobsCount;
 		private long jobsComplete;
@@ -104,7 +105,6 @@ public class BackgroundExecutor {
 		protected TaskStatus doInBackground() throws Exception {
 			progressPane.changeLabel(this, task.getTitle() + "… ");
 			progressPane.changeCancelBtnVisible(this, task.canBeCanceled());
-			progressPane.changeVisibility(this, true);
 
 			runJobs();
 			return status;
@@ -115,9 +115,12 @@ public class BackgroundExecutor {
 			jobsCount = jobs.size();
 			LOG.debug("Starting background task '{}', jobs count: {}, time limit: {} ms, memory check: {}",
 					task.getTitle(), jobsCount, task.timeLimit(), task.checkMemoryUsage());
+			if (jobsCount != 1) {
+				progressPane.changeVisibility(this, true);
+			}
 			status = TaskStatus.STARTED;
 			int threadsCount = mainWindow.getSettings().getThreadsCount();
-			ThreadPoolExecutor executor = (ThreadPoolExecutor) Executors.newFixedThreadPool(threadsCount);
+			executor = (ThreadPoolExecutor) Executors.newFixedThreadPool(threadsCount);
 			for (Runnable job : jobs) {
 				executor.execute(job);
 			}
@@ -145,6 +148,10 @@ public class BackgroundExecutor {
 					setProgress(calcProgress(executor.getCompletedTaskCount()));
 					k++;
 					Thread.sleep(k < 20 ? 100 : 1000); // faster update for short tasks
+					if (jobsCount == 1 && k == 3) {
+						// small delay before show progress to reduce blinking on short tasks
+						progressPane.changeVisibility(this, true);
+					}
 				}
 			} catch (InterruptedException e) {
 				LOG.debug("Task wait interrupted");
@@ -174,13 +181,25 @@ public class BackgroundExecutor {
 					LOG.error("Task '{}' execution timeout, force cancel", task.getTitle());
 					return TaskStatus.CANCEL_BY_TIMEOUT;
 				}
-				if (checkMemoryUsage && !UiUtils.isFreeMemoryAvailable()) {
-					LOG.error("Task '{}' memory limit reached, force cancel", task.getTitle());
-					return TaskStatus.CANCEL_BY_MEMORY;
-				}
 				if (isCancelled() || Thread.currentThread().isInterrupted()) {
 					LOG.warn("Task '{}' canceled", task.getTitle());
 					return TaskStatus.CANCEL_BY_USER;
+				}
+				if (checkMemoryUsage && !UiUtils.isFreeMemoryAvailable()) {
+					LOG.info("Memory usage: {}", UiUtils.memoryInfo());
+					if (executor.getCorePoolSize() == 1) {
+						LOG.error("Task '{}' memory limit reached, force cancel", task.getTitle());
+						return TaskStatus.CANCEL_BY_MEMORY;
+					}
+					LOG.warn("Low memory, reduce processing threads count to 1");
+					// reduce thread count and continue
+					executor.setCorePoolSize(1);
+					System.gc();
+					UiUtils.sleep(1000); // wait GC
+					if (!UiUtils.isFreeMemoryAvailable()) {
+						LOG.error("Task '{}' memory limit reached (after GC), force cancel", task.getTitle());
+						return TaskStatus.CANCEL_BY_MEMORY;
+					}
 				}
 				return null;
 			};

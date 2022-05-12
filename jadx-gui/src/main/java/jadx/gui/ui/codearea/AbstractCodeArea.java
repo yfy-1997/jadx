@@ -8,8 +8,6 @@ import java.awt.event.FocusEvent;
 import java.awt.event.FocusListener;
 import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
-import java.awt.event.MouseAdapter;
-import java.awt.event.MouseEvent;
 
 import javax.swing.AbstractAction;
 import javax.swing.JCheckBoxMenuItem;
@@ -23,7 +21,11 @@ import javax.swing.text.BadLocationException;
 import javax.swing.text.Caret;
 import javax.swing.text.DefaultCaret;
 
+import org.fife.ui.rsyntaxtextarea.AbstractTokenMakerFactory;
 import org.fife.ui.rsyntaxtextarea.RSyntaxTextArea;
+import org.fife.ui.rsyntaxtextarea.Token;
+import org.fife.ui.rsyntaxtextarea.TokenMakerFactory;
+import org.fife.ui.rsyntaxtextarea.TokenTypes;
 import org.fife.ui.rtextarea.SearchContext;
 import org.fife.ui.rtextarea.SearchEngine;
 import org.jetbrains.annotations.Nullable;
@@ -31,6 +33,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import jadx.core.utils.StringUtils;
+import jadx.core.utils.exceptions.JadxRuntimeException;
 import jadx.gui.settings.JadxSettings;
 import jadx.gui.treemodel.JClass;
 import jadx.gui.treemodel.JNode;
@@ -47,12 +50,24 @@ public abstract class AbstractCodeArea extends RSyntaxTextArea {
 
 	private static final Logger LOG = LoggerFactory.getLogger(AbstractCodeArea.class);
 
+	public static final String SYNTAX_STYLE_SMALI = "text/smali";
+
+	static {
+		TokenMakerFactory tokenMakerFactory = TokenMakerFactory.getDefaultInstance();
+		if (tokenMakerFactory instanceof AbstractTokenMakerFactory) {
+			AbstractTokenMakerFactory atmf = (AbstractTokenMakerFactory) tokenMakerFactory;
+			atmf.putMapping(SYNTAX_STYLE_SMALI, "jadx.gui.ui.codearea.SmaliTokenMaker");
+		} else {
+			throw new JadxRuntimeException("Unexpected TokenMakerFactory instance: " + tokenMakerFactory.getClass());
+		}
+	}
+
 	protected final ContentPanel contentPanel;
 	protected final JNode node;
 
-	public AbstractCodeArea(ContentPanel contentPanel) {
+	public AbstractCodeArea(ContentPanel contentPanel, JNode node) {
 		this.contentPanel = contentPanel;
-		this.node = contentPanel.getNode();
+		this.node = node;
 
 		setMarkOccurrences(false);
 		setEditable(false);
@@ -178,50 +193,40 @@ public abstract class AbstractCodeArea extends RSyntaxTextArea {
 		return getWordByPosition(getCaretPosition());
 	}
 
-	public int getWordStart(int pos) {
-		int start = Math.max(0, pos - 1);
+	@Nullable
+	public String getWordByPosition(int pos) {
 		try {
-			if (!StringUtils.isWordSeparator(getText(start, 1).charAt(0))) {
-				do {
-					start--;
-				} while (start >= 0 && !StringUtils.isWordSeparator(getText(start, 1).charAt(0)));
-			}
-			start++;
-		} catch (BadLocationException e) {
-			LOG.error("Failed to find word start", e);
-			start = -1;
+			Token token = modelToToken(pos);
+			return getWordFromToken(token);
+		} catch (Exception e) {
+			LOG.error("Failed to get word at pos: {}", pos, e);
+			return null;
 		}
-		return start;
-	}
-
-	public int getWordEnd(int pos, int max) {
-		int end = pos;
-		try {
-			if (!StringUtils.isWordSeparator(getText(end, 1).charAt(0))) {
-				do {
-					end++;
-				} while (end < max && !StringUtils.isWordSeparator(getText(end, 1).charAt(0)));
-			}
-		} catch (BadLocationException e) {
-			LOG.error("Failed to find word end", e);
-			end = max;
-		}
-		return end;
 	}
 
 	@Nullable
-	public String getWordByPosition(int pos) {
-		int len = getDocument().getLength();
-		int start = getWordStart(pos);
-		int end = getWordEnd(pos, len);
-		try {
-			if (end <= start) {
-				return null;
-			}
-			return getText(start, end - start);
-		} catch (BadLocationException e) {
-			LOG.error("Failed to get word at pos: {}, start: {}, end: {}", pos, start, end, e);
+	private static String getWordFromToken(@Nullable Token token) {
+		if (token == null) {
 			return null;
+		}
+		switch (token.getType()) {
+			case TokenTypes.NULL:
+			case TokenTypes.WHITESPACE:
+			case TokenTypes.SEPARATOR:
+			case TokenTypes.OPERATOR:
+				return null;
+
+			case TokenTypes.IDENTIFIER:
+				if (token.length() == 1) {
+					char ch = token.charAt(0);
+					if (ch == ';' || ch == '.') {
+						return null;
+					}
+				}
+				return token.getLexeme();
+
+			default:
+				return token.getLexeme();
 		}
 	}
 
@@ -309,23 +314,6 @@ public abstract class AbstractCodeArea extends RSyntaxTextArea {
 		} catch (BadLocationException e) {
 			LOG.debug("Can't center current line", e);
 		}
-	}
-
-	private void registerWordHighlighter() {
-		addMouseListener(new MouseAdapter() {
-			@Override
-			public void mouseClicked(MouseEvent evt) {
-				if (evt.getClickCount() % 2 == 0 && !evt.isConsumed()) {
-					evt.consume();
-					String str = getSelectedText();
-					if (str != null) {
-						highlightAllMatches(str);
-					}
-				} else {
-					highlightAllMatches(null);
-				}
-			}
-		});
 	}
 
 	/**

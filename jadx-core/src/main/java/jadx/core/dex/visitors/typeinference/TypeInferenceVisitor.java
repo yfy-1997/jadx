@@ -57,6 +57,7 @@ import jadx.core.dex.visitors.ssa.SSATransform;
 import jadx.core.utils.BlockUtils;
 import jadx.core.utils.InsnList;
 import jadx.core.utils.InsnUtils;
+import jadx.core.utils.ListUtils;
 import jadx.core.utils.Utils;
 import jadx.core.utils.exceptions.JadxOverflowException;
 
@@ -83,10 +84,12 @@ public final class TypeInferenceVisitor extends AbstractVisitor {
 		this.resolvers = Arrays.asList(
 				this::initTypeBounds,
 				this::runTypePropagation,
+				this::tryRestoreTypeVarCasts,
 				this::tryInsertCasts,
 				this::tryDeduceTypes,
 				this::trySplitConstInsns,
 				this::tryToFixIncompatiblePrimitives,
+				this::tryToForceImmutableTypes,
 				this::tryInsertAdditionalMove,
 				this::runMultiVariableSearch,
 				this::tryRemoveGenerics);
@@ -519,7 +522,60 @@ public final class TypeInferenceVisitor extends AbstractVisitor {
 		return false;
 	}
 
-	@SuppressWarnings("ForLoopReplaceableByWhile")
+	/**
+	 * Fix check casts to type var extend type:
+	 * <br>
+	 * {@code <T extends Comparable> T var = (Comparable) obj; => T var = (T) obj; }
+	 */
+	private boolean tryRestoreTypeVarCasts(MethodNode mth) {
+		int changed = 0;
+		List<SSAVar> mthSVars = mth.getSVars();
+		for (SSAVar var : mthSVars) {
+			changed += restoreTypeVarCasts(var);
+		}
+		if (changed == 0) {
+			return false;
+		}
+		if (Consts.DEBUG_TYPE_INFERENCE) {
+			mth.addDebugComment("Restore " + changed + " type vars casts");
+		}
+		initTypeBounds(mth);
+		return runTypePropagation(mth);
+	}
+
+	private int restoreTypeVarCasts(SSAVar var) {
+		TypeInfo typeInfo = var.getTypeInfo();
+		Set<ITypeBound> bounds = typeInfo.getBounds();
+		if (!ListUtils.anyMatch(bounds, t -> t.getType().isGenericType())) {
+			return 0;
+		}
+		List<ITypeBound> casts = ListUtils.filter(bounds, TypeBoundCheckCastAssign.class::isInstance);
+		if (casts.isEmpty()) {
+			return 0;
+		}
+		ArgType bestType = selectBestTypeFromBounds(bounds).orElse(ArgType.UNKNOWN);
+		if (!bestType.isGenericType()) {
+			return 0;
+		}
+		List<ArgType> extendTypes = bestType.getExtendTypes();
+		if (extendTypes.size() != 1) {
+			return 0;
+		}
+		int fixed = 0;
+		ArgType extendType = extendTypes.get(0);
+		for (ITypeBound bound : casts) {
+			TypeBoundCheckCastAssign cast = (TypeBoundCheckCastAssign) bound;
+			ArgType castType = cast.getType();
+			TypeCompareEnum result = typeUpdate.getTypeCompare().compareTypes(extendType, castType);
+			if (result.isEqual() || result == TypeCompareEnum.NARROW_BY_GENERIC) {
+				cast.getInsn().updateIndex(bestType);
+				fixed++;
+			}
+		}
+		return fixed;
+	}
+
+	@SuppressWarnings({ "ForLoopReplaceableByWhile", "ForLoopReplaceableByForEach" })
 	private boolean tryInsertCasts(MethodNode mth) {
 		int added = 0;
 		List<SSAVar> mthSVars = mth.getSVars();
@@ -835,6 +891,7 @@ public final class TypeInferenceVisitor extends AbstractVisitor {
 		if (typeInfo.getType().isTypeKnown()) {
 			return false;
 		}
+		boolean assigned = false;
 		for (ITypeBound bound : typeInfo.getBounds()) {
 			ArgType boundType = bound.getType();
 			switch (bound.getBound()) {
@@ -842,6 +899,7 @@ public final class TypeInferenceVisitor extends AbstractVisitor {
 					if (!boundType.contains(PrimitiveType.BOOLEAN)) {
 						return false;
 					}
+					assigned = true;
 					break;
 				case USE:
 					if (!boundType.canBeAnyNumber()) {
@@ -849,6 +907,9 @@ public final class TypeInferenceVisitor extends AbstractVisitor {
 					}
 					break;
 			}
+		}
+		if (!assigned) {
+			return false;
 		}
 
 		boolean fixed = false;
@@ -930,6 +991,36 @@ public final class TypeInferenceVisitor extends AbstractVisitor {
 		TernaryInsn convertInsn = ModVisitor.makeBooleanConvertInsn(resultArg, useArg, useType);
 		convertInsn.add(AFlag.SYNTHETIC);
 		return convertInsn;
+	}
+
+	private boolean tryToForceImmutableTypes(MethodNode mth) {
+		boolean fixed = false;
+		for (SSAVar ssaVar : mth.getSVars()) {
+			ArgType type = ssaVar.getTypeInfo().getType();
+			if (!type.isTypeKnown() && ssaVar.isTypeImmutable()) {
+				if (forceImmutableType(ssaVar)) {
+					fixed = true;
+				}
+			}
+		}
+		if (!fixed) {
+			return false;
+		}
+		return runTypePropagation(mth);
+	}
+
+	private boolean forceImmutableType(SSAVar ssaVar) {
+		for (RegisterArg useArg : ssaVar.getUseList()) {
+			InsnNode parentInsn = useArg.getParentInsn();
+			if (parentInsn != null) {
+				InsnType insnType = parentInsn.getType();
+				if (insnType == InsnType.AGET || insnType == InsnType.APUT) {
+					ssaVar.setType(ssaVar.getImmutableType());
+					return true;
+				}
+			}
+		}
+		return false;
 	}
 
 	private static void assignImmutableTypes(MethodNode mth) {

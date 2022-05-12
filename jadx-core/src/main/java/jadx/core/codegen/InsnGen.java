@@ -20,6 +20,7 @@ import jadx.core.dex.attributes.AType;
 import jadx.core.dex.attributes.nodes.FieldReplaceAttr;
 import jadx.core.dex.attributes.nodes.GenericInfoAttr;
 import jadx.core.dex.attributes.nodes.LoopLabelAttr;
+import jadx.core.dex.attributes.nodes.MethodReplaceAttr;
 import jadx.core.dex.attributes.nodes.SkipMethodArgsAttr;
 import jadx.core.dex.info.ClassInfo;
 import jadx.core.dex.info.FieldInfo;
@@ -50,6 +51,7 @@ import jadx.core.dex.instructions.args.RegisterArg;
 import jadx.core.dex.instructions.args.SSAVar;
 import jadx.core.dex.instructions.mods.ConstructorInsn;
 import jadx.core.dex.instructions.mods.TernaryInsn;
+import jadx.core.dex.nodes.BlockNode;
 import jadx.core.dex.nodes.ClassNode;
 import jadx.core.dex.nodes.FieldNode;
 import jadx.core.dex.nodes.InsnNode;
@@ -517,7 +519,7 @@ public class InsnGen {
 				code.add(' ');
 				code.add(ifInsn.getOp().getSymbol()).add(' ');
 				addArg(code, insn.getArg(1));
-				code.add(") goto ").add(MethodGen.getLabelName(ifInsn.getTarget()));
+				code.add(") goto ").add(MethodGen.getLabelName(ifInsn));
 				break;
 
 			case GOTO:
@@ -538,13 +540,24 @@ public class InsnGen {
 				code.add(") {");
 				code.incIndent();
 				int[] keys = sw.getKeys();
-				int[] targets = sw.getTargets();
-				for (int i = 0; i < keys.length; i++) {
-					code.startLine("case ").add(Integer.toString(keys[i])).add(": goto ");
-					code.add(MethodGen.getLabelName(targets[i])).add(';');
+				int size = keys.length;
+				BlockNode[] targetBlocks = sw.getTargetBlocks();
+				if (targetBlocks != null) {
+					for (int i = 0; i < size; i++) {
+						code.startLine("case ").add(Integer.toString(keys[i])).add(": goto ");
+						code.add(MethodGen.getLabelName(targetBlocks[i])).add(';');
+					}
+					code.startLine("default: goto ");
+					code.add(MethodGen.getLabelName(sw.getDefTargetBlock())).add(';');
+				} else {
+					int[] targets = sw.getTargets();
+					for (int i = 0; i < size; i++) {
+						code.startLine("case ").add(Integer.toString(keys[i])).add(": goto ");
+						code.add(MethodGen.getLabelName(targets[i])).add(';');
+					}
+					code.startLine("default: goto ");
+					code.add(MethodGen.getLabelName(sw.getDefaultCaseOffset())).add(';');
 				}
-				code.startLine("default: goto ");
-				code.add(MethodGen.getLabelName(sw.getDefaultCaseOffset())).add(';');
 				code.decIndent();
 				code.startLine('}');
 				break;
@@ -682,19 +695,27 @@ public class InsnGen {
 			throw new JadxRuntimeException("Constructor 'self' invoke must be removed!");
 		}
 		MethodNode callMth = mth.root().resolveMethod(insn.getCallMth());
+		MethodNode refMth = callMth;
+		if (callMth != null) {
+			MethodReplaceAttr replaceAttr = callMth.get(AType.METHOD_REPLACE);
+			if (replaceAttr != null) {
+				refMth = replaceAttr.getReplaceMth();
+			}
+		}
+
 		if (insn.isSuper()) {
-			code.attachAnnotation(callMth);
+			code.attachAnnotation(refMth);
 			code.add("super");
 		} else if (insn.isThis()) {
-			code.attachAnnotation(callMth);
+			code.attachAnnotation(refMth);
 			code.add("this");
 		} else {
 			code.add("new ");
-			if (callMth == null || callMth.contains(AFlag.DONT_GENERATE)) {
+			if (refMth == null || refMth.contains(AFlag.DONT_GENERATE)) {
 				// use class reference if constructor method is missing (default constructor)
 				code.attachAnnotation(mth.root().resolveClass(insn.getCallMth().getDeclClass()));
 			} else {
-				code.attachAnnotation(callMth);
+				code.attachAnnotation(refMth);
 			}
 			mgen.getClassGen().addClsName(code, insn.getClassType());
 			GenericInfoAttr genericInfoAttr = insn.get(AType.GENERIC_INFO);

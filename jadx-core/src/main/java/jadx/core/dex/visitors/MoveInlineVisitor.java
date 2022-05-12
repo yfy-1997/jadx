@@ -52,9 +52,18 @@ public class MoveInlineVisitor extends AbstractVisitor {
 		if (resultArg.sameRegAndSVar(moveArg)) {
 			return true;
 		}
+		if (moveArg.isRegister()) {
+			RegisterArg moveReg = (RegisterArg) moveArg;
+			if (moveReg.getSVar().isAssignInPhi()) {
+				// don't mix already merged variables
+				return false;
+			}
+		}
 		SSAVar ssaVar = resultArg.getSVar();
 		if (ssaVar.isUsedInPhi()) {
-			return deleteMove(mth, move);
+			return false;
+			// TODO: review conditions of 'up' move inline (test TestMoveInline)
+			// return deleteMove(mth, move);
 		}
 		RegDebugInfoAttr debugInfo = moveArg.get(AType.REG_DEBUG_INFO);
 		for (RegisterArg useArg : ssaVar.getUseList()) {

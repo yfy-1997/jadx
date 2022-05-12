@@ -4,24 +4,25 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 
 import jadx.api.data.impl.JadxCodeData;
 
 public class ProjectData {
 
 	private int projectVersion = 1;
-	private List<Path> files;
+	private List<Path> files = new ArrayList<>();
 	private List<String[]> treeExpansions = new ArrayList<>();
 	private JadxCodeData codeData = new JadxCodeData();
 	private List<TabViewState> openTabs = Collections.emptyList();
-	private int activeTab;
+	private int activeTab = -1;
 
 	public List<Path> getFiles() {
 		return files;
 	}
 
 	public void setFiles(List<Path> files) {
-		this.files = files;
+		this.files = Objects.requireNonNull(files);
 	}
 
 	public List<String[]> getTreeExpansions() {
@@ -52,15 +53,33 @@ public class ProjectData {
 		return openTabs;
 	}
 
-	public void setOpenTabs(List<TabViewState> openTabs) {
+	/**
+	 *
+	 * @param openTabs
+	 * @return <code>true></code> if a change was saved
+	 */
+	public boolean setOpenTabs(List<TabViewState> openTabs) {
+		if (this.openTabs.equals(openTabs)) {
+			return false;
+		}
 		this.openTabs = openTabs;
+		return true;
 	}
 
 	public int getActiveTab() {
 		return activeTab;
 	}
 
-	public void setActiveTab(int activeTab) {
+	/**
+	 *
+	 * @param activeTab
+	 * @return <code>true></code> if a change was saved
+	 */
+	public boolean setActiveTab(int activeTab) {
+		if (this.activeTab == activeTab) {
+			return false;
+		}
 		this.activeTab = activeTab;
+		return true;
 	}
 }
